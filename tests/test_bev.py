@@ -126,36 +126,52 @@ def test_wall_at_car_edge_is_kept():
     assert obs[r, c] > BEV_ROAD_LEVEL
 
 
-# -- BEV rotation gating (only above TRAVEL_ALIGN_MIN_KPH) -------------------
+# -- BEV rotation (damped below TRAVEL_ALIGN_MIN_KPH) ------------------------
 
-def test_rotation_angle_gates_on_airspeed():
-    # below the limit (and at the limit) the grid stays unrotated
+def test_rotation_angle_damps_below_limit():
+    # at rest the grid stays unrotated; below the limit only a fraction of
+    # the drift angle is applied (airSpeed / TRAVEL_ALIGN_MIN_KPH)
     assert bev_rotation_angle({"angle": 30.0, "airSpeed": 0.0}) == 0.0
-    assert bev_rotation_angle({"angle": 30.0, "airSpeed": TRAVEL_ALIGN_MIN_KPH}) == 0.0
+    assert bev_rotation_angle(
+        {"angle": 30.0, "airSpeed": TRAVEL_ALIGN_MIN_KPH / 2.0}) == 15.0
     assert bev_rotation_angle({"angle": 30.0}) == 0.0  # no airSpeed -> 0
-    # above the limit the drift angle is used
-    assert bev_rotation_angle({"angle": 30.0, "airSpeed": TRAVEL_ALIGN_MIN_KPH + 1.0}) == 30.0
+    # at and above the limit the full drift angle is used
+    assert bev_rotation_angle(
+        {"angle": 30.0, "airSpeed": TRAVEL_ALIGN_MIN_KPH}) == 30.0
+    assert bev_rotation_angle(
+        {"angle": 30.0, "airSpeed": TRAVEL_ALIGN_MIN_KPH + 1.0}) == 30.0
     assert bev_rotation_angle({"angle": -45.0, "airSpeed": 100.0}) == -45.0
 
 
-def test_rotation_angle_reversing_is_0():
-    # moving in reverse at speed: unrotated, the grid stays aligned with the
-    # car's heading (independent of the drift angle)
-    assert bev_rotation_angle({"angle": 0.0, "airSpeed": 50.0, "reversing": True}) == 0.0
-    assert bev_rotation_angle({"angle": 30.0, "airSpeed": 50.0, "reversing": True}) == 0.0
-    # reversing below the speed limit: still unrotated (crawl)
-    assert bev_rotation_angle({"angle": 0.0, "airSpeed": 5.0, "reversing": True}) == 0.0
-    # not reversing: the drift angle is used
-    assert bev_rotation_angle({"angle": 30.0, "airSpeed": 50.0, "reversing": False}) == 30.0
+def test_rotation_angle_reversing_in_reverse_gear_is_0():
+    # moving backwards in gear -1: unrotated, the grid stays aligned with
+    # the car's heading (independent of the drift angle)
+    assert bev_rotation_angle(
+        {"angle": 0.0, "airSpeed": 50.0, "reversing": True}, -1) == 0.0
+    assert bev_rotation_angle(
+        {"angle": 30.0, "airSpeed": 50.0, "reversing": True}, -1) == 0.0
+    # moving backwards in any other gear: the alignment is kept (damped
+    # below the speed limit, full above it)
+    assert bev_rotation_angle(
+        {"angle": 30.0, "airSpeed": 50.0, "reversing": True}, 1) == 30.0
+    assert bev_rotation_angle(
+        {"angle": 30.0, "airSpeed": 5.0, "reversing": True}, 1) \
+        == 30.0 * (5.0 / TRAVEL_ALIGN_MIN_KPH)
+    # not reversing: the drift angle is used (any gear)
+    assert bev_rotation_angle(
+        {"angle": 30.0, "airSpeed": 50.0, "reversing": False}, -1) == 30.0
 
 
-def test_bev_not_rotated_below_limit():
-    # a drift at a crawl: the grid must match the unrotated (angle 0) render,
-    # so the same physical scene reads identically whether drifting or not
+def test_bev_rotation_damps_below_limit():
+    # a drift at a crawl: the grid is rotated by a fraction of the drift
+    # angle (airSpeed / TRAVEL_ALIGN_MIN_KPH) - the same render as the scaled
+    # angle at full speed
     pts = [[10.0, 5.0, 0.0], [-8.0, -3.0, 0.5], [3.0, -12.0, 1.0]]
-    low = render(pts, {"angle": 30.0, "airSpeed": 5.0})
-    none = render(pts, {"angle": 0.0, "airSpeed": 5.0})
-    assert np.array_equal(low, none)
+    speed = 5.0
+    low = render(pts, {"angle": 30.0, "airSpeed": speed})
+    scaled = render(pts, {"angle": 30.0 * speed / TRAVEL_ALIGN_MIN_KPH,
+                          "airSpeed": 100.0})
+    assert np.array_equal(low, scaled)
 
 
 def test_bev_rotated_above_limit():

@@ -374,6 +374,16 @@ class VehicleRig:
         self._imu_acc, self._imu_angvel = acc, angvel
         return acc, angvel
 
+    def _gear(self):
+        """The engaged gear from the Electrics sensor (0 when unavailable).
+
+        Feeds the BEV alignment's reverse-gear gate (obs.bev_rotation_angle).
+        """
+        try:
+            return int(self.vehicle.sensors["electrics"]["gear"])
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return 0
+
     # -- observation --------------------------------------------------------
     def _road_bev(self):
         """The merged road BEV (1.0 = drivable) around the car, rasterized from
@@ -395,7 +405,7 @@ class VehicleRig:
                 self._navigraph = get_navigraph(self.beamng)
             state = self.vehicle.state
             pos = np.asarray(state["pos"], float)
-            fwd, left = car_grid_axes(state)
+            fwd, left = car_grid_axes(state, self._gear())
             mask = self._navigraph.to_bev(pos, fwd=fwd, left=left,
                                           merge_margin=ROAD_MERGE_MARGIN)
             self._last_road_mask = mask
@@ -451,7 +461,7 @@ class VehicleRig:
             if self._navigraph is not None and self.vehicle is not None:
                 state = self.vehicle.state
                 pos = np.asarray(state["pos"], float)
-                fwd, left = car_grid_axes(state)
+                fwd, left = car_grid_axes(state, self._gear())
                 centerline, dist = road_centerline_segments(
                     self._navigraph, pos, fwd=fwd, left=left)
                 if centerline.size:
@@ -477,7 +487,7 @@ class VehicleRig:
                 self._navigraph = get_navigraph(self.beamng)
             state = self.vehicle.state
             pos = np.asarray(state["pos"], float)
-            fwd, left = car_grid_axes(state)
+            fwd, left = car_grid_axes(state, self._gear())
             _, dist = road_centerline_segments(self._navigraph, pos,
                                                fwd=fwd, left=left)
             return float(dist)
@@ -534,7 +544,7 @@ class VehicleRig:
                 self._navigraph = get_navigraph(self.beamng)
             state = self.vehicle.state
             pos = np.asarray(state["pos"], float)
-            fwd, left = car_grid_axes(state)
+            fwd, left = car_grid_axes(state, self._gear())
             return self._navigraph.surface_outlines(pos, fwd=fwd, left=left)
         except Exception:
             return []
@@ -571,7 +581,7 @@ class VehicleRig:
             # (returns above the road) as returns
             pc = self._remove_road_surface(self.poll_lidar_points(), rot)
             bev = bev_to_obs(lidar_bev(pc, self.vehicle.state, drift, n=BEV_N,
-                                       rot=rot))
+                                       rot=rot, gear=self._gear()))
         with (self._road_stream or nullcontext()):
             road = self._road_bev()
         for stream in (self._pc_stream, self._road_stream):

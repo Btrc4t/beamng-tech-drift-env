@@ -83,15 +83,15 @@ else:
     _RSM_KERNEL = None
 
 
-def car_grid_axes(state):
+def car_grid_axes(state, gear=0):
     """The world vectors for the road BEV's grid axes (fwd = grid "up",
     left = grid "right"), aligned the same way the LiDAR BEV is (travel
-    direction when moving fast forward, the heading when slow or reversing -
-    see obs.bev_rotation_angle)."""
+    direction, damped toward the heading below TRAVEL_ALIGN_MIN_KPH, the
+    heading when reversing in gear -1 - see obs.bev_rotation_angle)."""
     dirv = np.asarray(state["dir"], float); dirv /= np.linalg.norm(dirv)
     up = np.asarray(state["up"], float); up /= np.linalg.norm(up)
     left = np.cross(up, dirv); left /= np.linalg.norm(left)
-    theta = np.deg2rad(bev_rotation_angle(drift_from_state(state)))
+    theta = np.deg2rad(bev_rotation_angle(drift_from_state(state), gear))
     fwd = np.cos(theta) * dirv + np.sin(theta) * left
     left_grid = np.cross(up, fwd); left_grid /= np.linalg.norm(left_grid)
     return fwd, left_grid

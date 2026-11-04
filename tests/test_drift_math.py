@@ -71,6 +71,25 @@ def test_below_min_speed():
     assert r["scoreAdded"] == 0.0
 
 
+def test_low_speed_angle_reported():
+    # below TRAVEL_ALIGN_MIN_KPH the raw drift angle is still reported (the
+    # BEV alignment damps it, see test_bev.py)
+    r = drift_from_state(state_at(45.0, 5.0))
+    assert abs(abs(r["angle"]) - 45.0) < 1e-3
+    assert r["angle"] < 0.0  # same sign convention as at speed
+    assert r["isDrifting"] is False
+    assert r["scoreAdded"] == 0.0
+    assert r["reversing"] is False
+
+
+def test_low_speed_reversing():
+    # reversing at a crawl: the flag is set (the reward scales down)
+    r = drift_from_state(state_at(180.0, 5.0))
+    assert r["reversing"] is True
+    assert r["isDrifting"] is False
+    assert r["scoreAdded"] == 0.0
+
+
 def test_angle_bounded():
     # the signed angle must always fit the observation space [-1, 1] after /180
     for angle in (-179, -90, 0, 90, 179):

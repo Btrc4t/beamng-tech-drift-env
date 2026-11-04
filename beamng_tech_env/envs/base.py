@@ -20,6 +20,7 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 from beamngpy.logging import BNGDisconnectedError, BNGError, BNGValueError
+from beamngpy.misc.quat import flip_y_axis
 
 from beamng_tech_env.core.constants import (
     ALLOWED_GEARS,
@@ -301,7 +302,6 @@ class BeamNGBaseEnv(gym.Env):
                 # saved spawn to a waypoint (None makes reset pick one)
                 self._checkpoint = None
             else:
-                from beamngpy.misc.quat import flip_y_axis
                 # rotate the saved pose 180 deg about the vertical (z) axis so the
                 # car respawns facing the opposite direction
                 self._checkpoint = (tuple(self.ego.state["pos"]),

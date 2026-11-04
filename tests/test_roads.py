@@ -9,7 +9,12 @@ beam; ``car_grid_axes`` gives the world vectors for the grid axes.
 import numpy as np
 
 from beamng_tech_env.core.array import to_cpu
-from beamng_tech_env.core.constants import BEV_N, LIDAR_MAX_DIST
+from beamng_tech_env.core.constants import (
+    BEV_N,
+    LIDAR_MAX_DIST,
+    TRAVEL_ALIGN_MIN_KPH,
+)
+from beamng_tech_env.core.obs import drift_from_state
 from beamng_tech_env.core.roads import (
     Navigraph,
     RoadNetwork,
@@ -332,18 +337,47 @@ def _state(vel=(10.0, 0.0, 0.0), dirv=(1.0, 0.0, 0.0)):
 
 
 def test_car_grid_axes_slow_keeps_heading():
-    # below TRAVEL_ALIGN_MIN_KPH: the grid stays aligned with the car's heading
+    # slow with no slip (velocity along the heading): the drift angle is 0,
+    # so the grid stays aligned with the car's heading
     fwd, left = car_grid_axes(_state(vel=(1.0, 0.0, 0.0)))  # 3.6 kph
     assert np.allclose(fwd, [1.0, 0.0, 0.0])
     assert np.allclose(left, [0.0, 1.0, 0.0])
 
 
-def test_car_grid_axes_reversing_keeps_heading():
-    # reversing at speed: the rotation is 0, so the grid stays aligned with
-    # the car's heading (not the backward direction)
-    fwd, left = car_grid_axes(_state(vel=(-10.0, 0.0, 0.0)))
+def test_car_grid_axes_slow_partial_alignment():
+    # slow drift: the grid is rotated by a fraction of the drift angle
+    # (airSpeed / TRAVEL_ALIGN_MIN_KPH), not the full angle
+    th = np.deg2rad(-30.0)
+    vel = tuple(1.0 * c for c in (np.cos(th), np.sin(th), 0.0))  # 3.6 kph
+    speed_kph = float(np.linalg.norm(vel) * 3.6)
+    rot = np.deg2rad(-30.0 * speed_kph / TRAVEL_ALIGN_MIN_KPH)
+    fwd, left = car_grid_axes(_state(vel=vel))
+    dirv = np.array([1.0, 0.0, 0.0])
+    leftv = np.array([0.0, 1.0, 0.0])
+    assert np.allclose(fwd, np.cos(rot) * dirv + np.sin(rot) * leftv)
+
+
+def test_car_grid_axes_reversing_in_reverse_gear_keeps_heading():
+    # moving backwards in gear -1: the rotation is 0, so the grid stays
+    # aligned with the car's heading (not the backward direction)
+    th = np.deg2rad(210.0)  # backwards with a 30 deg slip
+    vel = tuple(10.0 * c for c in (np.cos(th), np.sin(th), 0.0))
+    fwd, left = car_grid_axes(_state(vel=vel), gear=-1)
     assert np.allclose(fwd, [1.0, 0.0, 0.0])
     assert np.allclose(left, [0.0, 1.0, 0.0])
+
+
+def test_car_grid_axes_reversing_other_gear_aligns():
+    # moving backwards in a forward gear (e.g. rolling back in 1st): the
+    # alignment is kept (the full drift angle at this speed)
+    th = np.deg2rad(210.0)
+    vel = tuple(10.0 * c for c in (np.cos(th), np.sin(th), 0.0))
+    drift = drift_from_state(_state(vel=vel))
+    rot = np.deg2rad(drift["angle"])
+    fwd, left = car_grid_axes(_state(vel=vel), gear=1)
+    dirv = np.array([1.0, 0.0, 0.0])
+    leftv = np.array([0.0, 1.0, 0.0])
+    assert np.allclose(fwd, np.cos(rot) * dirv + np.sin(rot) * leftv)
 
 
 def test_car_grid_axes_drift_aligns_with_travel():

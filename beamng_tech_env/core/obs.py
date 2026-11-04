@@ -39,27 +39,32 @@ def drift_from_state(state):
     absolute yaw difference between the velocity direction and the heading,
     signed by vel . (up x dir). The game's drift score is player-centric, so
     for a group of vehicles we compute a per-frame score proxy here instead.
+
+    The angle is reported at any speed (0 at rest, where the velocity
+    direction is undefined); the BEV alignment damps it toward 0 below
+    TRAVEL_ALIGN_MIN_KPH (see bev_rotation_angle).
     """
     vel = np.asarray(state["vel"], float)
     dirv = np.asarray(state["dir"], float)
     up = np.asarray(state["up"], float)
     speed_kph = float(np.linalg.norm(vel) * 3.6)
-    if speed_kph < TRAVEL_ALIGN_MIN_KPH:
-        return {"angle": 0.0, "airSpeed": speed_kph,
-                "isDrifting": False, "scoreAdded": 0.0, "reversing": False}
-
-    d = dirv / np.linalg.norm(dirv)
-    v = vel / np.linalg.norm(vel)
-    # the game measures slip as a horizontal-plane (x, y) yaw difference via
-    # atan2, not the full 3D angle (drift.lua:201-230); mirror that exactly so
-    # the parity holds on slopes, where the 3D arccos would pick up pitch
-    yaw_diff = np.arctan2(d[1], d[0]) - np.arctan2(v[1], v[0])
-    yaw_diff = (yaw_diff + np.pi) % (2.0 * np.pi) - np.pi
-    angle = float(abs(np.degrees(yaw_diff)))
-    sign = float(np.sign(np.dot(vel, np.cross(up, dirv))))
-    # moving in reverse: the velocity has a backward component (the signed
-    # drift angle is 0 for a straight reverse, so it can't be used for this)
-    reversing = bool(np.dot(v, d) < 0.0)
+    if speed_kph > 0.0:
+        d = dirv / np.linalg.norm(dirv)
+        v = vel / np.linalg.norm(vel)
+        # the game measures slip as a horizontal-plane (x, y) yaw difference
+        # via atan2, not the full 3D angle (drift.lua:201-230); mirror that
+        # exactly so the parity holds on slopes, where the 3D arccos would
+        # pick up pitch
+        yaw_diff = np.arctan2(d[1], d[0]) - np.arctan2(v[1], v[0])
+        yaw_diff = (yaw_diff + np.pi) % (2.0 * np.pi) - np.pi
+        angle = float(abs(np.degrees(yaw_diff)))
+        sign = float(np.sign(np.dot(vel, np.cross(up, dirv))))
+        # moving in reverse: the velocity has a backward component (the signed
+        # angle is 0 for a straight reverse, so it can't be used for this)
+        reversing = bool(np.dot(v, d) < 0.0)
+    else:
+        # at rest the velocity direction is undefined
+        angle, sign, reversing = 0.0, 0.0, False
     is_drifting = (DRIFT_MIN_ANGLE < angle < DRIFT_MAX_ANGLE
                    and speed_kph > DRIFT_MIN_AIRSPEED)
     # per-frame score proxy, scaled so the reward stays in a similar range
@@ -90,28 +95,36 @@ def drift_rotation(drift_angle_deg):
     return np.cos(th), np.sin(th)
 
 
-def bev_rotation_angle(drift):
-    """The BEV grid rotation (deg) for a drift reading: the drift angle only
-    above TRAVEL_ALIGN_MIN_KPH and while the car moves forward, else 0.
+def bev_rotation_angle(drift, gear=0):
+    """The BEV grid rotation (deg) for a drift reading: the drift angle,
+    damped toward 0 below TRAVEL_ALIGN_MIN_KPH, or 0 while reversing in
+    reverse gear.
 
-    Below that speed, or while reversing (``drift["reversing"]``, the
-    velocity has a backward component), the travel direction is unreliable,
-    so the grid stays aligned with the car's heading (angle 0).
+    Below that speed the travel direction is unreliable, so only a fraction
+    of the drift angle is applied (airSpeed / TRAVEL_ALIGN_MIN_KPH), ramping
+    the grid from the car's heading to the travel direction as the speed
+    builds up. While moving backwards in gear -1 the grid stays aligned with
+    the car's heading (angle 0); moving backwards in any other gear (e.g.
+    rolling back in 1st) keeps the alignment.
     """
-    if (drift.get("airSpeed", 0.0) <= TRAVEL_ALIGN_MIN_KPH
-            or drift.get("reversing", False)):
+    if drift.get("reversing", False) and int(gear) == -1:
         return 0.0
-    return drift.get("angle", 0.0)
+    angle = drift.get("angle", 0.0)
+    airspeed = drift.get("airSpeed", 0.0)
+    if airspeed <= TRAVEL_ALIGN_MIN_KPH:
+        return angle * (airspeed / TRAVEL_ALIGN_MIN_KPH)
+    return angle
 
 
-def lidar_bev(pc, state, drift, n=BEV_N, range_m=LIDAR_MAX_DIST, rot=None):
+def lidar_bev(pc, state, drift, n=BEV_N, range_m=LIDAR_MAX_DIST, rot=None,
+              gear=0):
     """Bird's eye view height grid: the car is in the center, the grid spans
     [-range_m, +range_m] around it, values are the highest LiDAR return per
     cell clamped to [0, 1] (0.5 = road level). Returns higher than
     BEV_MAX_HEIGHT (tunnel/overpass ceilings) are dropped so they don't read
     as obstacles. The grid is aligned with the travel direction (rotated by
-    the drift angle) only above TRAVEL_ALIGN_MIN_KPH, else it stays aligned
-    with the car's heading (see bev_rotation_angle). The car is not painted:
+    the drift angle, damped toward the car's heading below
+    TRAVEL_ALIGN_MIN_KPH - see bev_rotation_angle). The car is not painted:
     its own body returns (the roof LiDAR catches the car, mostly the rear)
     are dropped at the point-cloud stage by the body box, so a wall right at
     the car's edge keeps its points (outside the box) and the beams
@@ -119,7 +132,7 @@ def lidar_bev(pc, state, drift, n=BEV_N, range_m=LIDAR_MAX_DIST, rot=None):
     wide in x/y but narrow in z (CAR_Z_LO..CAR_Z_HI, the body height): only
     returns at the car's own height are cut, so the road and low obstacles
     (a wall's base, a curb) survive even just outside the x/y box."""
-    angle = bev_rotation_angle(drift)
+    angle = bev_rotation_angle(drift, gear)
     c, s = drift_rotation(angle)
 
     pc = np.asarray(pc, float)
